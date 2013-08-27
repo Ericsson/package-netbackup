@@ -1,0 +1,91 @@
+#!/bin/bash
+#
+# nb_extract_client.sh
+#
+# Script used to extract client packages from a NetBackup Master server.
+#
+# Requirements:
+# - NetBackup Master server with supported clients available
+# - fpm installed (gem install fpm)
+#
+# author: johan.x.wennerberg@ericsson.com
+# version: 0.1
+
+usage()
+{
+  echo "usage: `basename $0` <osfamily>"
+  echo ; echo "Supported osfamilies: redhat, suse"
+}
+
+#-----------------------------------------------
+# Main
+#-----------------------------------------------
+
+osfamily=$1
+[ -z $osfamily ] && (usage ; exit 1)
+
+PATH="/bin:/usr/bin"
+netbackup_clients=/usr/openv/netbackup/client
+netbackup_bin=/usr/openv/netbackup/bin
+
+nb_packages="SYMCnbclt:client_bin.tar.gz \
+SYMCnbjre:JRE.tar.gz \
+SYMCnbjava:NB-Java.tar.gz \
+VRTSpbx:PBX.tar.gz \
+SYMCpddea:pddeagent.tar.gz"
+
+case $osfamily in
+  redhat)
+    package_type='rpm'
+    client_dir="${netbackup_clients}/Linux/RedHat2.6.18"
+    os='el'
+  ;;
+  suse)
+    package_type='rpm'
+    client_dir="${netbackup_clients}/Linux/SuSE2.6.16"
+    os=$osfamily
+  ;;
+  *)
+  usage ; exit 1
+  ;;
+esac
+
+destdir=`mktemp -d /tmp/nbclient.XXX`
+
+for p in $nb_packages; do
+  name=`echo $p | cut -f1 -d:`
+  targz=`echo $p |cut -f2 -d:`
+
+  echo "Extracting package ${name}"
+
+  if [ ! -f "${client_dir}/${targz}" ]; then
+    echo "ERROR: Could not find archive ${client_dir}/${targz}."
+    continue
+  fi
+
+  cd $destdir
+  tar xf "${client_dir}/${targz}"
+
+  if [ $package_type = 'rpm' ]; then
+    if [ $name = 'SYMCnbclt' ]; then
+      nbclt_version=`rpm -qp --qf "%{VERSION}" ${destdir}/${name}*.rpm`
+      nbclt_release=`rpm -qp --qf "%{RELEASE}" ${destdir}/${name}*.rpm`
+      nbclt_arch=`rpm -qp --qf "%{ARCH}" ${destdir}/${name}*.rpm`
+    fi
+    package_name=`rpm -qp --qf "%{NAME}-%{VERSION}-%{RELEASE}.${os}.%{ARCH}.rpm" ${destdir}/${name}*.rpm`
+    mv ${destdir}/${name}*.rpm ${destdir}/${package_name}
+  fi
+done
+
+# Build additional nbtar package
+nbtar_version=$nbclt_version
+nbtar_release=$nbclt_release
+nbtar_arch=$nbclt_arch
+echo "Building package nbtar"
+if [ -d $client_dir ]; then
+  fpm -C $client_dir -s dir -t $package_type -n nbtar -p ${destdir}/nbtar-${nbtar_version}-${nbtar_release}.${os}.${nbtar_arch}.${package_type} -v $nbtar_version --iteration ${nbtar_release}.${os} -a ${nbtar_arch} --prefix $netbackup_bin --description "NetBackup GNU tar" --epoch $nbtar_release tar
+else
+  echo "ERROR: Could not find client directory ${client_dir}"
+fi
+
+echo "Client packages written to ${destdir}"
