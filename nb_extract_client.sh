@@ -7,6 +7,7 @@
 # Requirements:
 # - NetBackup Master server with supported clients available
 # - fpm installed (gem install fpm)
+# - rpmrebuild installed -- http://rpmrebuild.sourceforge.net/
 #
 # author: johan.x.wennerberg@ericsson.com
 # version: 0.1
@@ -89,16 +90,6 @@ for p in $nb_packages; do
     package_name=`rpm -qp --qf "%{NAME}-%{VERSION}-%{RELEASE}.${os}.%{ARCH}.rpm" ${destdir}/${name}*.rpm`
     mv ${destdir}/${name}*.rpm ${destdir}/${package_name}
 
-    # Build additional nbtar package
-    nbtar_version=$nbclt_version
-    nbtar_release=$nbclt_release
-    nbtar_arch=$nbclt_arch
-    echo "Building package nbtar"
-    if [ -d $client_dir ]; then
-      fpm -C $client_dir -s dir -t $package_type -n nbtar -p ${destdir}/nbtar-${nbtar_version}-${nbtar_release}.${os}.${nbtar_arch}.${package_type} -v $nbtar_version --iteration ${nbtar_release}.${os} -a ${nbtar_arch} --prefix $netbackup_bin --description "NetBackup GNU tar" --epoch $nbtar_release tar
-    else
-      echo "ERROR: Could not find client directory ${client_dir}"
-    fi
   elif [ $package_type = 'solaris' ]; then
     echo "Creating solaris adminfile"
     cat >> ${destdir}/admin << EOF
@@ -117,4 +108,47 @@ EOF
   fi
 done
 
+# Build additional nbtar package
+nbtar_version=$nbclt_version
+nbtar_release=$nbclt_release
+nbtar_arch=$nbclt_arch
+echo "Building package nbtar"
+if [ -d $client_dir ]; then
+  fpm -C $client_dir -s dir -t $package_type -n nbtar -p ${destdir}/nbtar-${nbtar_version}-${nbtar_release}.${os}.${nbtar_arch}.${package_type} -v $nbtar_version --iteration ${nbtar_release}.${os} -a ${nbtar_arch} --prefix $netbackup_bin --description "NetBackup GNU tar" --epoch $nbtar_release tar
+else
+  echo "ERROR: Could not find client directory ${client_dir}"
+fi
+
 echo "Client packages written to ${destdir}"
+
+if [ "$package_type" != "rpm" ]; then
+  exit 0
+fi
+
+# Repackaging SYMCnbclt
+echo 'Repackaging SYMCnbclt'
+nbclt_rpm=${destdir}/SYMCnbclt*.rpm
+nbclt_rpmrebuild_modify=${destdir}/rpmrebuild-modify.sh
+nbclt_rpmrebuild_change_spec_files=${destdir}/rpmrebuild-change-spec-files.sh
+mv $nbclt_rpm ${nbclt_rpm}.orig
+cat > $nbclt_rpmrebuild_modify <<EOD
+#!/bin/bash
+cp -p ${client_dir}/version \
+  \$RPMREBUILD_TMPDIR/work/root/${netbackup_bin}/
+EOD
+chmod +x $nbclt_rpmrebuild_modify
+cat > $nbclt_rpmrebuild_change_spec_files <<EOD
+#!/bin/bash
+cat
+echo '%attr(0444, root, bin) "${netbackup_bin}/version"'
+EOD
+chmod +x $nbclt_rpmrebuild_change_spec_files
+
+# rebuild the rpm
+rpmrebuild --change-spec-files=$nbclt_rpmrebuild_change_spec_files \
+  --modify=$nbclt_rpmrebuild_modify -b -p ${nbclt_rpm}.orig
+
+# cleaning up
+rm -f $nbclt_rpmrebuild_modify $nbclt_rpmrebuild_change_spec_files
+
+echo "Please find the SYMCnbclt package in your rpmbuild/RPMS directory"
